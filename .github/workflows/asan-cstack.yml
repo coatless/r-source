@@ -1,10 +1,11 @@
 name: asan-cstack
 
-# Builds R with GCC's address and undefined behavior sanitizers, at the pull
-# request's base and with its change applied, in the gccsan arm of
-# https://github.com/coatless/docker-r-check (Debian testing, rcheckserver,
-# the CRAN QA tree's build-R and Rconf -bi -x). Then prints Cstack_info()
-# under the sanitizer's defaults and runs tests/reg-tests-1b.R 200 times.
+# Builds R with GCC's or clang's address and undefined behavior sanitizers,
+# at the pull request's base and with its change applied, in the gccsan and
+# clangsan arms of https://github.com/coatless/docker-r-check (Debian testing,
+# rcheckserver, the CRAN QA tree's build-R and Rconf, -bi -x for GCC and
+# -fc/23 -bi -x for clang 23 with libc++). Then prints Cstack_info() under
+# the sanitizer's defaults and runs tests/reg-tests-1b.R 200 times.
 on:
   pull_request:
 
@@ -15,6 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        flavour: [gccsan, clangsan]
         source: [base, patched]
     steps:
       - uses: actions/checkout@v5
@@ -62,13 +64,13 @@ jobs:
           sudo mkswap /rcc-swap > /dev/null
           sudo swapon /rcc-swap
 
-      - name: sources and the gccsan arm, on the published base image
+      - name: sources and the ${{ matrix.flavour }} arm, on the published base image
         run: |
           set -o pipefail
           docker pull --quiet ghcr.io/coatless/docker-r-check:base
           docker build --progress=plain --platform linux/amd64 --target build-r \
             --build-context base=docker-image://ghcr.io/coatless/docker-r-check:base \
-            --build-arg RCC_FLAVOUR=gccsan --build-arg R_SVN_REV=${{ steps.rev.outputs.rev }} \
+            --build-arg RCC_FLAVOUR=${{ matrix.flavour }} --build-arg R_SVN_REV=${{ steps.rev.outputs.rev }} \
             -t rcc-build-r rcc/docker 2>&1 | tail -n 40
 
       - name: build R and run make check
@@ -76,19 +78,21 @@ jobs:
           set -o pipefail
           cat > ctx/Dockerfile <<'EOF'
           FROM rcc-build-r
+          ARG RCC_FLAVOUR
           USER root
           RUN install -d -o rbuild -g rbuild /build
           USER rbuild
           COPY --chown=rbuild:rbuild patch.diff /tmp/patch.diff
           RUN if [ -s /tmp/patch.diff ]; then cd /src/R && patch -p1 < /tmp/patch.diff; fi
           ENV ASAN_OPTIONS=detect_leaks=0
-          RUN . /opt/rcheck/flavours/gccsan.env; \
-              if NO_UPDATE=1 MAKEFLAGS=-j4 /bin/bash /entry-build-r.sh ${RCC_RCONF_FLAGS} > /build/build.out 2>&1; \
+          RUN . /opt/rcheck/flavours/${RCC_FLAVOUR}.env; \
+              if NO_UPDATE=1 MAKEFLAGS=-j4 /bin/bash /entry-build-r.sh ${RCC_RCONF_FLAGS} ${RCC_LDFLAGS} > /build/build.out 2>&1; \
               then echo passed > /build/make-check; \
               else echo failed > /build/make-check; tail -n 30 /build/build.out; fi; \
               test -x /build/bin/R
           EOF
-          docker build --progress=plain --platform linux/amd64 -t rcc-cstack ctx 2>&1 | tail -n 40
+          docker build --progress=plain --platform linux/amd64 \
+            --build-arg RCC_FLAVOUR=${{ matrix.flavour }} -t rcc-cstack ctx 2>&1 | tail -n 40
 
       - name: Cstack_info() and the regression test
         run: |
@@ -110,7 +114,7 @@ jobs:
           wait
           read -r failed cstack <<< "$(cat rep-*.txt | awk '{f += $1; c += $2} END {print f, c}')"
           {
-            echo "### R-devel r${{ steps.rev.outputs.rev }}, ${{ matrix.source }}"
+            echo "### R-devel r${{ steps.rev.outputs.rev }}, ${{ matrix.flavour }}, ${{ matrix.source }}"
             echo
             echo "CPU: $(cat cpu.txt). make check: $(docker run --rm --entrypoint cat "$img" /build/make-check)."
             echo "reg-tests-1b.R failed $failed of 200 runs, $cstack of them on the Cstack_info() comparison."
