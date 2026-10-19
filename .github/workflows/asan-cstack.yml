@@ -1,0 +1,129 @@
+name: asan-cstack
+
+# Builds R with GCC's address and undefined behavior sanitizers, at the pull
+# request's base and with its change applied, in the gccsan arm of
+# https://github.com/coatless/docker-r-check (Debian testing, rcheckserver,
+# the CRAN QA tree's build-R and Rconf -bi -x). Then prints Cstack_info()
+# under the sanitizer's defaults and runs tests/reg-tests-1b.R 200 times.
+on:
+  pull_request:
+
+jobs:
+  cstack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [base, patched]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          path: r
+
+      - uses: actions/checkout@v5
+        with:
+          repository: coatless/docker-r-check
+          ref: debian-blas-arms
+          path: rcc
+
+      - name: revision and change
+        id: rev
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cd r
+          git fetch -q --depth=1 origin "$BASE_SHA"
+          rev=$(git log -1 --format=%B "$BASE_SHA" | sed -n 's/.*git-svn-id: [^@]*@\([0-9]*\) .*/\1/p')
+          [ -n "$rev" ] || { echo "no SVN revision on $BASE_SHA"; exit 1; }
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          mkdir -p ../ctx
+          if [ "${{ matrix.source }}" = patched ]; then
+            git diff "$BASE_SHA" HEAD -- src > ../ctx/patch.diff
+          else
+            : > ../ctx/patch.diff
+          fi
+          echo "R-devel r$rev, ${{ matrix.source }}"
+          cat ../ctx/patch.diff
+
+      - name: reclaim disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /usr/local/lib/node_modules \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: add swap
+        run: |
+          sudo fallocate -l 16G /rcc-swap
+          sudo chmod 600 /rcc-swap
+          sudo mkswap /rcc-swap > /dev/null
+          sudo swapon /rcc-swap
+
+      - name: sources and the gccsan arm, on the published base image
+        run: |
+          set -o pipefail
+          docker pull --quiet ghcr.io/coatless/docker-r-check:base
+          docker build --progress=plain --platform linux/amd64 --target build-r \
+            --build-context base=docker-image://ghcr.io/coatless/docker-r-check:base \
+            --build-arg RCC_FLAVOUR=gccsan --build-arg R_SVN_REV=${{ steps.rev.outputs.rev }} \
+            -t rcc-build-r rcc/docker 2>&1 | tail -n 40
+
+      - name: build R and run make check
+        run: |
+          set -o pipefail
+          cat > ctx/Dockerfile <<'EOF'
+          FROM rcc-build-r
+          USER root
+          RUN install -d -o rbuild -g rbuild /build
+          USER rbuild
+          COPY --chown=rbuild:rbuild patch.diff /tmp/patch.diff
+          RUN if [ -s /tmp/patch.diff ]; then cd /src/R && patch -p1 < /tmp/patch.diff; fi
+          ENV ASAN_OPTIONS=detect_leaks=0
+          RUN . /opt/rcheck/flavours/gccsan.env; \
+              if NO_UPDATE=1 MAKEFLAGS=-j4 /bin/bash /entry-build-r.sh ${RCC_RCONF_FLAGS} > /build/build.out 2>&1; \
+              then echo passed > /build/make-check; \
+              else echo failed > /build/make-check; tail -n 30 /build/build.out; fi; \
+              test -x /build/bin/R
+          EOF
+          docker build --progress=plain --platform linux/amd64 -t rcc-cstack ctx 2>&1 | tail -n 40
+
+      - name: Cstack_info() and the regression test
+        run: |
+          img=rcc-cstack
+          sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -n 1 > cpu.txt
+          # four containers, 50 runs each, of the target make check uses
+          for k in 1 2 3 4; do
+            docker run --rm --entrypoint bash "$img" -c '
+              cd /build/tests; f=0; c=0
+              for i in $(seq 1 50); do
+                rm -f reg-tests-1b.Rout reg-tests-1b.Rout.fail
+                if ! make -s reg-tests-1b.Rout RVAL_IF_DIFF=0 > /dev/null 2>&1; then
+                  f=$((f + 1))
+                  grep -q "z\[2\] > z10\[2\] is not TRUE" reg-tests-1b.Rout.fail && c=$((c + 1))
+                fi
+              done
+              echo "$f $c"' > "rep-$k.txt" &
+          done
+          wait
+          read -r failed cstack <<< "$(cat rep-*.txt | awk '{f += $1; c += $2} END {print f, c}')"
+          {
+            echo "### R-devel r${{ steps.rev.outputs.rev }}, ${{ matrix.source }}"
+            echo
+            echo "CPU: $(cat cpu.txt). make check: $(docker run --rm --entrypoint cat "$img" /build/make-check)."
+            echo "reg-tests-1b.R failed $failed of 200 runs, $cstack of them on the Cstack_info() comparison."
+            echo
+            echo '```'
+            for opt in detect_leaks=0 detect_leaks=0:detect_stack_use_after_return=0; do
+              for _ in 1 2 3; do
+                printf '%-46s ' "$opt"
+                docker run --rm -e ASAN_OPTIONS="$opt" --entrypoint /build/bin/R "$img" --vanilla --no-echo -e '
+                  f <- function(depth) if(depth < 20) f(depth+1) else Cstack_info()
+                  z <- f(0); z10 <- f(10)
+                  cat("size", z[1], " z", z[2], " z10", z10[2], "\n")' 2>&1 | tail -n 1
+              done
+            done
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
