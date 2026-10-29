@@ -119,6 +119,9 @@
       arguments in the Usage section to their documentation in the
       Arguments section.
 
+      \item The X11 on-screen devices now supports history navigation
+      through (customizable) key bindings.
+
     }
   }
 
@@ -173,6 +176,17 @@
 
   \subsection{Bug Fixes}{
     \itemize{
+      \item The internal method of \code{untar()} now checks the whole path
+      of every member, so that a final component of \code{".."} or \code{"~"}
+      can no longer place a link or file outside the extraction directory;
+      rejects hard- and symbolic-link targets restored as file copies,
+      which resolve outside the extraction directory or pass through a
+      symbolic link; applies the \command{umask} to extracted files; also no longer
+      restores \samp{setuid} or \samp{setgid} permission bits.
+      Similarly, the internal method of \code{unzip()} no longer extracts
+      through symbolic links below \code{exdir}, both thanks to \I{Kevin
+      Ushey}'s report and patch in \PR{19229}.
+
       \item For \code{x <-  <large-POSIXlt>}, for some boundary cases
       with \code{x$sec - floor(x$sec)} close to 1, \code{c(x)} could
       become one second ahead of \code{x} in \R 4.6.0;  \I{subassignments}
@@ -366,10 +380,6 @@
       inside a masked \code{viewport}. Thanks to \I{Trevor Davis}' patch
       proposal in \PR{19075}.
 
-      \item \code{strsplit(str, perl=TRUE, bytes=TRUE)} no longer accesses
-      invalid memory in case \code{str} is an invalid UTF-8 string, fixing
-      \PR{19212}, thanks to \I{Kevin Ushey}.
-
       \item \code{trace} with non-\code{NULL} \code{exit} replaced
       rematched S4 method definitions with non-rematched ones that
       evaluated \code{exit} twice, first on \code{.local} exit and again
@@ -377,8 +387,59 @@
 
       \item When tracing rematched S4 methods, \code{trace} could insert
       a call \code{trace(.local, tracer=, exit=, \dots)} with improper
-      \code{tracer} and \code{exit} components.  Thanks to Hao Wang for
+      \code{tracer} and \code{exit} components.  Thanks to \I{Hao Wang} for
       the report (\PR{18707}).
+
+      \item Fixes for \code{grid.pack(row.after=)}
+      (and \code{row.before} and \code{col.after} and
+      \code{col.before}) and \code{grid.pack(dynamic=TRUE)}.
+      Thanks to \I{Athenkosi Nkonyeni} for reports.
+
+      \item \code{parse_Rd()} should no longer leak memory when errors are
+      raised, thanks to \I{Kevin Ushey}'s report and patch in \PR{19184}.
+
+      \item \code{delete.response} inadvertently converted indices
+      (attributes \code{response}, \code{offset}, \code{specials}) from
+      integer to double.  It also replaced \code{NULL} components of
+      \code{specials} with \code{logical(0L)}.
+
+      \item When interaction terms or offsets were present,
+      \code{drop.terms} and \code{[.terms} could return a \code{terms}
+      object with invalid \code{predvars} and \code{dataClasses}
+      attributes.  One consequence was that \code{x[-j]} and
+      \code{x[seq_len(n)[-j]]} could differ for objects \code{x} with
+      \code{n} terms and indices \code{j} in \code{seq_len(n)}.
+
+      \item \code{unzip(., unzip = "internal")} no longer leaks the zip
+      handle on error, thanks to \I{Kevin Ushey}, see \PR{19233}
+
+      \item The S4 methods for \code{initialize} with signature
+      \code{.Object="oldClass"} or \code{.Object=".environment"}
+      evaluated arguments of type \code{"symbol"} or \code{"call"} when
+      dispatching next methods, causing misbehaviour of
+      \code{new(Class, \dots)} with symbols or calls in \code{\dots}.
+      Thanks to \I{Alexis Sardá-Espinosa} for the report (\PR{16629}).
+
+      \item The S4 methods for \code{initialize} with signature
+      \code{.Object="array"}, \code{.Object="matrix"}, or
+      \code{.Object="ts"} did not give higher precedence to named
+      components of \code{\dots}, violating the convention of the
+      default method.  Thanks to \I{Dan Murphy} for the report
+      (\PR{14323}).
+    }
+  }
+}
+
+\section{\Rlogo Changes in R 4.6.2 patched}{
+  \subsection{New Features}{
+    \itemize{
+      \item \code{capabilities()} now reports if \code{zstd} compression
+      is supported.
+    }
+  }
+  \subsection{Installation}{
+    \itemize{
+      \item \command{configure} now reports if \code{zstd} support was found.
     }
   }
 }
@@ -496,9 +557,18 @@
       with \code{dffits()}, \code{dfbetas()}, \code{covratio()}. \PR{19167} by
       \I{Amal Tawfik}.
 
+      \item If \code{wilcox.test(..., exact=TRUE)}'s p-value is close to
+      the 0 or 1 boundaries, the calculation no longer suffers severely
+      from cancellation, thanks to \I{Tasuku Kobayashi}'s reports and
+      \I{Ahmed Sattar Jabbar}'s suggestion in \PR{19144}.
+
       \item Long stringed error messages are now protected from premature
       garbage collection, fixing \PR{19210}, reported and analyzed by
       \I{Yuancheng Jiang}.
+
+      \item \code{strsplit(str, perl=TRUE, bytes=TRUE)} no longer accesses
+      invalid memory in case \code{str} is an invalid UTF-8 string, fixing
+      \PR{19212}, thanks to \I{Kevin Ushey}.
 
       \item \code{isoreg(numeric(0))} no longer returns unallocated component
       \code{yc}, fixing \PR{19224} thanks to \I{Kevin Ushey}.
@@ -569,11 +639,6 @@
       \item \code{wilcox.test(x, exact=FALSE, correct = k)}'s p-value
       computation got a missing \code{dnorm(z)} factor, and so did the
       2-sample case, in addition to more fixes.
-
-      Further, if \code{wilcox.test(.., exact=TRUE)}'s p-value is close to
-      the 0 or 1 boundaries, the calculation no longer suffers severely
-      from cancellation, thanks to \I{Tasuku Kobayashi}'s reports and
-      \I{Ahmed Sattar Jabbar}'s suggestion in \PR{19144}.
 
       \item The data part of \code{getGenerics()} listed package names for
       generic functions defined in more than one package.  Now it
