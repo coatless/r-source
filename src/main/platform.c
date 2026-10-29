@@ -3448,11 +3448,7 @@ attribute_hidden SEXP do_readlink(SEXP call, SEXP op, SEXP args, SEXP env)
 }
 
 
-/* Not instrumented, as R_CheckStack: with the address sanitizer's fake
-   stack (the default on Linux since GCC 13 and clang 15) 'ans' would be
-   allocated on the heap and the current usage would be meaningless. */
-attribute_hidden SEXP attribute_no_sanitizer_instrumentation
-do_Cstack_info(SEXP call, SEXP op, SEXP args, SEXP rho)
+attribute_hidden SEXP attribute_no_sanitizer_instrumentation do_Cstack_info(SEXP call, SEXP op, SEXP args, SEXP rho)
 {
     SEXP ans, nms;
 
