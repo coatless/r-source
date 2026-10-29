@@ -3448,7 +3448,7 @@ attribute_hidden SEXP do_readlink(SEXP call, SEXP op, SEXP args, SEXP env)
 }
 
 
-attribute_hidden SEXP do_Cstack_info(SEXP call, SEXP op, SEXP args, SEXP rho)
+attribute_hidden SEXP attribute_no_sanitizer_instrumentation do_Cstack_info(SEXP call, SEXP op, SEXP args, SEXP rho)
 {
     SEXP ans, nms;
 
